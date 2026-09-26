@@ -141,15 +141,14 @@ class Handler(BaseHTTPRequestHandler):
                 if result.feasible else "不存在能同时满足全部异或约束的故障向量（不可行）"
             ),
         }
+        # payload 为该编号自己的输入快照；conclusion 为其自包含结论
+        # （最小重量、故障通道、选择向量、提示语、逐校验复算）。
+        # 两者按复核编号整体保存，同板后续提交不会改动既有记录。
         payload = {"channels": ordered, "checks": [
             {"channels": list(members), "parity": parity}
             for members, parity in norm_checks
         ]}
-        evidence = {
-            field: conclusion[field]
-            for field in ("feasible", "weight", "faulty", "vector", "recompute", "message")
-        }
-        review_id = save_submission(payload, conclusion, evidence)
+        review_id = save_submission(payload, conclusion)
         self._send_json(200, {
             "review_id": review_id,
             "input": payload,

@@ -63,3 +63,19 @@ python tests/test_api.py
 APP_DB=/tmp/l.db python app/server.py
 APP_URL=http://127.0.0.1:8080 python tests/smoke_api.py
 ```
+
+## 同板多次观测的编号隔离验收
+
+每个复核编号永久对应自己的输入、最小重量、故障通道、选择向量、提示语
+与逐校验证据；同一板（通道集合相同）的后续提交、页面刷新及服务重启
+都不得改变既有记录（含不可行结论）。
+
+```bash
+# Compose：启动服务 → 依次提交“仅 A”“仅 C”两次观测 → 查询两条记录
+# → 重启 app → 再次核对首条编号仍定位 A
+sh scripts/acceptance.sh
+```
+
+验收逻辑见 `tests/acceptance_api.py`（`phase1`/`phase2` 两阶段，可脱离
+Docker 对任意 `APP_URL` 运行），常规回归用例为
+`tests/test_api.py::test_same_board_two_observations_stay_isolated`。

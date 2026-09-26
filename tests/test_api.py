@@ -147,6 +147,58 @@ class ApiTests(unittest.TestCase):
             data = json.loads(e.read().decode("utf-8"))
             self.assertEqual(data["field"], "body")
 
+    def test_same_board_two_observations_stay_isolated(self):
+        # 同一块板（通道集合不变）两次合法观测：先仅 A 失效，再仅 C 失效。
+        # 每个复核编号必须永久对应自己的输入/向量/逐校验复算；后续提交
+        # 与重新取回都不得把首条编号的证据覆盖成第二次观测。
+        sets = [["A", "B"], ["A", "C"], ["B", "C"]]
+
+        def body(parities):
+            return {
+                "channels": ["A", "B", "C"],
+                "checks": [
+                    {"channels": m, "parity": p}
+                    for m, p in zip(sets, parities)
+                ],
+            }
+
+        status, data_a = self._req("POST", "/api/submit", body([1, 1, 0]))
+        self.assertEqual(status, 200, data_a)
+        rid_a = data_a["review_id"]
+        self.assertEqual(data_a["conclusion"]["faulty"], ["A"])
+
+        status, data_c = self._req("POST", "/api/submit", body([0, 1, 1]))
+        self.assertEqual(status, 200, data_c)
+        rid_c = data_c["review_id"]
+        self.assertNotEqual(rid_a, rid_c)
+        self.assertEqual(data_c["conclusion"]["faulty"], ["C"])
+
+        # 重新打开/刷新首条编号：仍须定位 A，且输入与逐校验复算属于观测 1。
+        status, got_a = self._req("GET", f"/api/review/{rid_a}")
+        self.assertEqual(status, 200)
+        self.assertEqual(got_a["input"], body([1, 1, 0]))
+        ca = got_a["conclusion"]
+        self.assertEqual(ca["faulty"], ["A"])
+        self.assertEqual(ca["weight"], 1)
+        self.assertEqual(ca["vector"], {"A": 1, "B": 0, "C": 0})
+        self.assertIn("A", ca["message"])
+        self.assertEqual(
+            [(r["observed"], r["recomputed"], r["pass"]) for r in ca["recompute"]],
+            [(1, 1, True), (1, 1, True), (0, 0, True)],
+        )
+
+        # 第二条独立定位 C，证据属于观测 2。
+        status, got_c = self._req("GET", f"/api/review/{rid_c}")
+        self.assertEqual(status, 200)
+        self.assertEqual(got_c["input"], body([0, 1, 1]))
+        cc = got_c["conclusion"]
+        self.assertEqual(cc["faulty"], ["C"])
+        self.assertEqual(cc["vector"], {"A": 0, "B": 0, "C": 1})
+        self.assertEqual(
+            [(r["observed"], r["recomputed"], r["pass"]) for r in cc["recompute"]],
+            [(0, 0, True), (1, 1, True), (1, 1, True)],
+        )
+
     def test_unknown_review_id_404(self):
         status, data = self._req("GET", "/api/review/deadbeefdead")
         self.assertEqual(status, 404)
