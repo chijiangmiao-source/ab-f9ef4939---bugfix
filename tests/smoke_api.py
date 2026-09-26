@@ -94,6 +94,71 @@ def main():
     check("不可行记录可取回且仍不可行",
           status == 200 and got["conclusion"]["feasible"] is False)
 
+    # 4b. 同一通道集合的两次合法观测：两条复核编号必须各自独立。
+    #     第一次仅 A 失效，第二次仅 C 失效；首条编号不得被后一次覆盖。
+    channels = ["A", "B", "C"]
+    obs_only_a = {
+        "channels": channels,
+        "checks": [
+            {"channels": ["A", "B"], "parity": 1},
+            {"channels": ["A", "C"], "parity": 1},
+            {"channels": ["B", "C"], "parity": 0},
+        ],
+    }
+    obs_only_c = {
+        "channels": channels,
+        "checks": [
+            {"channels": ["A", "B"], "parity": 0},
+            {"channels": ["A", "C"], "parity": 1},
+            {"channels": ["B", "C"], "parity": 1},
+        ],
+    }
+    status, first = call("POST", "/api/submit", obs_only_a)
+    check("第一次观测提交 200", status == 200, str(first))
+    check("第一次观测定位 A", first["conclusion"]["faulty"] == ["A"],
+          str(first["conclusion"].get("faulty")))
+    rid_first = first["review_id"]
+
+    status, second = call("POST", "/api/submit", obs_only_c)
+    check("第二次观测提交 200", status == 200, str(second))
+    check("第二次观测定位 C", second["conclusion"]["faulty"] == ["C"],
+          str(second["conclusion"].get("faulty")))
+    rid_second = second["review_id"]
+    check("两次复核编号不同", rid_first != rid_second)
+
+    status, got1 = call("GET", f"/api/review/{rid_first}")
+    check("首条记录仍定位 A", status == 200
+          and got1["conclusion"]["faulty"] == ["A"],
+          str(got1.get("conclusion")))
+    check("首条记录输入仍为第一次提交", got1["input"] == {
+        "channels": channels,
+        "checks": obs_only_a["checks"],
+    }, str(got1.get("input")))
+    check("首条记录选择向量仅 A 置位",
+          got1["conclusion"]["vector"] == {"A": 1, "B": 0, "C": 0},
+          str(got1["conclusion"].get("vector")))
+    check("首条记录逐校验复算与自身输入一致",
+          [(r["members"], r["observed"], r["pass"])
+           for r in got1["conclusion"]["recompute"]]
+          == [(["A", "B"], 1, True), (["A", "C"], 1, True),
+              (["B", "C"], 0, True)],
+          str(got1["conclusion"].get("recompute")))
+
+    status, got2 = call("GET", f"/api/review/{rid_second}")
+    check("第二条记录定位 C", status == 200
+          and got2["conclusion"]["faulty"] == ["C"],
+          str(got2.get("conclusion")))
+    check("第二条记录输入为第二次提交", got2["input"] == {
+        "channels": channels,
+        "checks": obs_only_c["checks"],
+    }, str(got2.get("input")))
+    check("第二条记录逐校验复算与自身输入一致",
+          [(r["members"], r["observed"], r["pass"])
+           for r in got2["conclusion"]["recompute"]]
+          == [(["A", "B"], 0, True), (["A", "C"], 1, True),
+              (["B", "C"], 1, True)],
+          str(got2["conclusion"].get("recompute")))
+
     # 5. 非法输入：可定位拒绝（重复通道 / 空集合 / 非法奇偶）
     status, data = call("POST", "/api/submit", {
         "channels": ["a", "b", "a"],

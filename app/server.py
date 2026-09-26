@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
-from solver import ValidationError, recompute, solve
+from solver import ValidationError, conclusion_evidence, solve
 from storage import init_db, load_submission, save_submission
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -123,33 +123,16 @@ class Handler(BaseHTTPRequestHandler):
         # 提交顺序一致，这里重新规范化一次校验集合。
         ordered = list(result.channels)
         norm_checks = _normalize_checks_for_recompute(ordered, checks)
-        recomputed = recompute(ordered, norm_checks, list(result.vector)) if result.feasible else []
-
-        conclusion = {
-            "feasible": result.feasible,
-            "weight": result.weight,
-            "faulty": list(result.faulty),
-            "vector": (
-                {ch: bit for ch, bit in zip(result.channels, result.vector)}
-                if result.feasible else {}
-            ),
-            "left_size": result.left_size,
-            "left_index_size": result.left_index_size,
-            "recompute": recomputed,
-            "message": (
-                f"最小故障通道 {result.weight} 个：{', '.join(result.faulty)}"
-                if result.feasible else "不存在能同时满足全部异或约束的故障向量（不可行）"
-            ),
-        }
         payload = {"channels": ordered, "checks": [
             {"channels": list(members), "parity": parity}
             for members, parity in norm_checks
         ]}
-        evidence = {
-            field: conclusion[field]
-            for field in ("feasible", "weight", "faulty", "vector", "recompute", "message")
+        conclusion = {
+            "left_size": result.left_size,
+            "left_index_size": result.left_index_size,
+            **conclusion_evidence(result, norm_checks),
         }
-        review_id = save_submission(payload, conclusion, evidence)
+        review_id = save_submission(payload, conclusion)
         self._send_json(200, {
             "review_id": review_id,
             "input": payload,

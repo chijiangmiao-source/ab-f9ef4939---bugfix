@@ -165,6 +165,18 @@ document.getElementById("submitBtn").addEventListener("click", async () => {
 });
 
 // ---------- 按编号取回 ----------
+function fillForm(input) {
+  // 用记录自己保存的输入回填表单，使页面上的输入、故障向量与
+  // 逐校验证据始终属于同一个复核编号。
+  if (!input) return;
+  document.getElementById("channels").value = (input.channels || []).join(" ");
+  checksBox.innerHTML = "";
+  for (const ck of input.checks || []) {
+    addCheckRow((ck.channels || []).join(" "), String(ck.parity));
+  }
+  if (checksBox.children.length === 0) addCheckRow();
+}
+
 async function loadReview(id) {
   clearEvidence();
   document.getElementById("reviewId").value = id;
@@ -174,6 +186,7 @@ async function loadReview(id) {
     showErrors(data || { errors: [{ field: "review_id", message: "取回失败" }] });
     return;
   }
+  fillForm(data.input);
   renderConclusion(data);
 }
 

@@ -328,3 +328,30 @@ def recompute(ordered_channels, checks, vector) -> list[dict]:
             "pass": got == parity,
         })
     return results
+
+
+def conclusion_evidence(result: SolveResult, checks) -> dict:
+    """把求解结果展开为可持久化的结论证据字段。
+
+    checks 为与提交内容一致的 [(通道元组, 奇偶值)]（已规范化），用于
+    逐校验复算；不可行时复算列表为空。接口层与存储迁移共用本函数，
+    保证同一输入永远得到同一份证据。
+    """
+    return {
+        "feasible": result.feasible,
+        "weight": result.weight,
+        "faulty": list(result.faulty),
+        "vector": (
+            {ch: bit for ch, bit in zip(result.channels, result.vector)}
+            if result.feasible else {}
+        ),
+        "recompute": (
+            recompute(list(result.channels), checks, list(result.vector))
+            if result.feasible else []
+        ),
+        "message": (
+            f"最小故障通道 {result.weight} 个：{', '.join(result.faulty)}"
+            if result.feasible
+            else "不存在能同时满足全部异或约束的故障向量（不可行）"
+        ),
+    }

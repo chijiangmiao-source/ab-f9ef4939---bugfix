@@ -89,6 +89,104 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(got["review_id"], rid)
         self.assertEqual(got["conclusion"]["faulty"], ["CH3"])
 
+    def test_same_board_records_stay_isolated(self):
+        """同一通道集合先后两次合法提交：两条复核编号必须各自永久对应
+        自己的输入、故障通道、选择向量与逐校验证据，互不被对方覆盖。"""
+        channels = ["A", "B", "C"]
+        obs_only_a = {
+            "channels": channels,
+            "checks": [
+                {"channels": ["A", "B"], "parity": 1},
+                {"channels": ["A", "C"], "parity": 1},
+                {"channels": ["B", "C"], "parity": 0},
+            ],
+        }
+        obs_only_c = {
+            "channels": channels,
+            "checks": [
+                {"channels": ["A", "B"], "parity": 0},
+                {"channels": ["A", "C"], "parity": 1},
+                {"channels": ["B", "C"], "parity": 1},
+            ],
+        }
+        status, first = self._req("POST", "/api/submit", obs_only_a)
+        self.assertEqual(status, 200, first)
+        self.assertEqual(first["conclusion"]["faulty"], ["A"])
+        rid_first = first["review_id"]
+
+        # 不改变通道集合，提交第二组同样合法但应定位 C 的观测
+        status, second = self._req("POST", "/api/submit", obs_only_c)
+        self.assertEqual(status, 200, second)
+        self.assertEqual(second["conclusion"]["faulty"], ["C"])
+        rid_second = second["review_id"]
+        self.assertNotEqual(rid_first, rid_second)
+
+        # 再次打开首条编号：结论与逐校验证据必须仍属于第一次观测
+        status, got1 = self._req("GET", f"/api/review/{rid_first}")
+        self.assertEqual(status, 200)
+        self.assertEqual(got1["conclusion"]["faulty"], ["A"])
+        self.assertEqual(got1["conclusion"]["weight"], 1)
+        self.assertEqual(got1["conclusion"]["vector"], {"A": 1, "B": 0, "C": 0})
+        self.assertEqual(got1["input"]["checks"], obs_only_a["checks"])
+        self.assertEqual(
+            [(r["members"], r["observed"], r["pass"])
+             for r in got1["conclusion"]["recompute"]],
+            [(["A", "B"], 1, True), (["A", "C"], 1, True), (["B", "C"], 0, True)],
+        )
+
+        # 第二条记录独立定位 C，复算与自身输入一致
+        status, got2 = self._req("GET", f"/api/review/{rid_second}")
+        self.assertEqual(status, 200)
+        self.assertEqual(got2["conclusion"]["faulty"], ["C"])
+        self.assertEqual(got2["conclusion"]["vector"], {"A": 0, "B": 0, "C": 1})
+        self.assertEqual(got2["input"]["checks"], obs_only_c["checks"])
+        self.assertEqual(
+            [(r["members"], r["observed"], r["pass"])
+             for r in got2["conclusion"]["recompute"]],
+            [(["A", "B"], 0, True), (["A", "C"], 1, True), (["B", "C"], 1, True)],
+        )
+
+        # 模拟服务重启：重新执行启动初始化后，既有记录不得发生任何变化。
+        server.init_db()
+        status, re1 = self._req("GET", f"/api/review/{rid_first}")
+        self.assertEqual(status, 200)
+        self.assertEqual(re1["conclusion"]["faulty"], ["A"])
+        self.assertEqual(re1["conclusion"]["vector"], {"A": 1, "B": 0, "C": 0})
+        self.assertTrue(all(r["pass"] for r in re1["conclusion"]["recompute"]))
+        status, re2 = self._req("GET", f"/api/review/{rid_second}")
+        self.assertEqual(re2["conclusion"]["faulty"], ["C"])
+
+    def test_infeasible_record_not_overwritten_by_same_board(self):
+        """不可行结论按各自提交保存：同板再次提交不得改写既有不可行记录。"""
+        channels = ["a", "b", "c"]
+        infeasible = {
+            "channels": channels,
+            "checks": [
+                {"channels": ["a", "b"], "parity": 0},
+                {"channels": ["a", "b", "c"], "parity": 0},
+                {"channels": ["c"], "parity": 1},
+            ],
+        }
+        feasible = {
+            "channels": channels,
+            "checks": [{"channels": ["a", "b", "c"], "parity": 1}],
+        }
+        status, first = self._req("POST", "/api/submit", infeasible)
+        self.assertEqual(status, 200)
+        self.assertFalse(first["conclusion"]["feasible"])
+        rid_first = first["review_id"]
+
+        status, second = self._req("POST", "/api/submit", feasible)
+        self.assertEqual(status, 200)
+        self.assertEqual(second["conclusion"]["faulty"], ["c"])
+
+        status, got = self._req("GET", f"/api/review/{rid_first}")
+        self.assertEqual(status, 200)
+        self.assertFalse(got["conclusion"]["feasible"])
+        self.assertEqual(got["conclusion"]["faulty"], [])
+        self.assertEqual(got["conclusion"]["recompute"], [])
+        self.assertIn("不可行", got["conclusion"]["message"])
+
     def test_infeasible_is_persisted(self):
         body = {
             "channels": ["a", "b", "c"],
